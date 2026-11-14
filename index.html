@@ -69,6 +69,11 @@
   #reader{width:100%}
   #scan .guide{position:absolute;inset:30% 8%;border:3px solid rgba(255,255,255,.85);border-radius:14px;pointer-events:none}
   #scan .last{position:absolute;top:12px;left:12px;right:12px;background:rgba(0,0,0,.65);color:#fff;border-radius:12px;padding:10px;text-align:center;font-size:16px;min-height:44px}
+  #weigh{z-index:40}
+  #weigh .field input{font-size:24px;height:56px;text-align:center}
+  .tag{display:inline-block;background:#e8f1fa;color:var(--brand);border-radius:8px;padding:1px 8px;font-size:12px;font-weight:700;margin-inline-start:6px}
+  .line .wv{font-size:22px;font-weight:800;color:var(--brand)}
+  .line .wb{height:44px;border:1px solid var(--line);background:#fff;border-radius:12px;padding:0 12px;font-size:15px;font-weight:700;color:var(--brand)}
   .done{text-align:center;padding:40px 16px}
   .done .big{font-size:64px;color:var(--ok)}
   .done h2{margin:8px 0}
@@ -124,6 +129,25 @@
     <div class="last" id="scanLast">وجّه الكاميرا نحو الباركود</div>
   </div>
   <div class="foot"><button class="btn sec" style="width:100%" id="scanDone">تم — العودة للسلة</button></div>
+</div>
+
+<!-- إدخال الوزن -->
+<div class="overlay" id="weigh">
+  <header>
+    <button class="iconbtn" id="wClose">✕</button>
+    <h1>إدخال الوزن</h1>
+  </header>
+  <div class="body">
+    <div class="line"><div class="top"><span id="wName"></span><span id="wPrice"></span></div><div class="sub" id="wInfo"></div></div>
+    <div class="field">
+      <label for="wInput" id="wLabel">الوزن (كجم)</label>
+      <input id="wInput" type="text" inputmode="decimal" autocomplete="off" placeholder="مثال: 1.250">
+    </div>
+    <div class="total"><span>إجمالي السطر</span><span id="wTotal">—</span></div>
+    <div id="wMsg"></div>
+    <p class="hint">اكتب الوزن بالكيلوجرام، ويمكن استخدام كسور حتى 3 أرقام (1.250 = كيلو و250 جرام).</p>
+  </div>
+  <div class="foot"><button class="btn ok" style="width:100%" id="wOk">إضافة للسلة</button></div>
 </div>
 
 <!-- الإعدادات -->
@@ -182,6 +206,9 @@ const num = n => Number(n).toLocaleString('en', {maximumFractionDigits:2});
 const norm = s => String(s == null ? '' : s).toLowerCase()
   .replace(/[\u064B-\u0652\u0640]/g,'').replace(/[أإآٱ]/g,'ا').replace(/ى/g,'ي').replace(/ة/g,'ه')
   .replace(/[٠-٩]/g, d => d.charCodeAt(0) - 1632).trim();
+const qf = n => Number(n).toLocaleString('en', {maximumFractionDigits:3});
+const r3 = n => Math.round(n * 1000) / 1000;
+const r2 = n => Math.round(n * 100) / 100;
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 
 /* ===== واجهة عامة ===== */
@@ -251,9 +278,9 @@ function renderList(){
     const out = p.balance <= 0;
     return '<button class="p' + (out ? ' out' : '') + '" data-id="' + esc(p.id) + '">' +
       '<div class="info"><div class="nm">' + esc(p.name) + '</div>' +
-      '<div class="mt">' + esc(p.size) + ' ' + esc(p.unit) + ' · ' + esc(p.supplier) + '</div>' +
-      '<div class="bl">' + (out ? 'نفد المخزون' : 'المتاح: ' + num(p.balance)) + '</div></div>' +
-      '<div class="pr">' + num(p.price) + '</div></button>';
+      '<div class="mt">' + (p.byWeight ? 'بالوزن<span class="tag">كجم</span>' : esc(p.size) + ' ' + esc(p.unit)) + ' · ' + esc(p.supplier) + '</div>' +
+      '<div class="bl">' + (out ? 'نفد المخزون' : 'المتاح: ' + (p.byWeight ? qf(p.balance) + ' كجم' : num(p.balance))) + '</div></div>' +
+      '<div class="pr">' + num(p.price) + (p.byWeight ? '<small style="font-size:12px;color:var(--muted)"> / كجم</small>' : '') + '</div></button>';
   }).join('');
 }
 
@@ -275,21 +302,22 @@ function addToCart(p, qty){
   qty = qty || 1;
   const cur = cart[p.id] || 0;
   if (p.balance <= 0){ toast('«' + p.name + '» نفد من المخزون', true); return false; }
+  if (p.byWeight){ openWeight(p, 'add'); return 'weigh'; }
   if (cur + qty > p.balance){ toast('المتاح من «' + p.name + '» ' + num(p.balance) + ' فقط', true); return false; }
   cart[p.id] = cur + qty; touch();
   return true;
 }
 
 function cartTotals(){
-  let n = 0, total = 0;
-  Object.keys(cart).forEach(id => { const p = byId[id]; if (p){ n += cart[id]; total += cart[id] * p.price; } });
-  return {n, lines: Object.keys(cart).length, total: Math.round(total * 100) / 100};
+  let n = 0, w = 0, total = 0;
+  Object.keys(cart).forEach(id => { const p = byId[id]; if (p){ if (p.byWeight) w += cart[id]; else n += cart[id]; total += r2(cart[id] * p.price); } });
+  return {n, w: r3(w), lines: Object.keys(cart).length, total: r2(total)};
 }
 
 function renderCartBar(){
   const t = cartTotals();
   $('cbTotal').textContent = num(t.total);
-  $('cbCount').textContent = t.lines ? (t.lines + ' صنف · ' + num(t.n) + ' قطعة') : 'السلة فارغة';
+  $('cbCount').textContent = t.lines ? (t.lines + ' صنف' + (t.n ? ' · ' + num(t.n) + ' قطعة' : '') + (t.w ? ' · ' + qf(t.w) + ' كجم' : '')) : 'السلة فارغة';
   $('btnCart').disabled = !t.lines;
 }
 
@@ -300,11 +328,19 @@ function renderCart(){
   } else {
     $('cartBody').innerHTML = ids.map(id => {
       const p = byId[id]; if (!p) return '';
+      if (p.byWeight){
+        return '<div class="line" data-id="' + esc(id) + '">' +
+          '<div class="top"><span>' + esc(p.name) + '<span class="tag">بالوزن</span></span><span>' + num(p.price) + ' / كجم</span></div>' +
+          '<div class="sub">' + esc(p.supplier) + ' · المتاح ' + qf(p.balance) + ' كجم</div>' +
+          '<div class="ctl"><span class="wv">' + qf(cart[id]) + ' كجم</span>' +
+          '<button class="wb" data-act="wadd">+ وزن</button><button class="wb" data-act="wset">تعديل</button>' +
+          '<button class="rm" data-act="rm">حذف</button><span class="lt">' + num(r2(cart[id] * p.price)) + '</span></div></div>';
+      }
       return '<div class="line" data-id="' + esc(id) + '">' +
         '<div class="top"><span>' + esc(p.name) + '</span><span>' + num(p.price) + '</span></div>' +
         '<div class="sub">' + esc(p.size) + ' ' + esc(p.unit) + ' · ' + esc(p.supplier) + ' · المتاح ' + num(p.balance) + '</div>' +
         '<div class="ctl"><div class="q"><button data-act="dec">−</button><span>' + cart[id] + '</span><button data-act="inc">+</button></div>' +
-        '<button class="rm" data-act="rm">حذف</button><span class="lt">' + num(cart[id] * p.price) + '</span></div></div>';
+        '<button class="rm" data-act="rm">حذف</button><span class="lt">' + num(r2(cart[id] * p.price)) + '</span></div></div>';
     }).join('');
   }
   $('cartTotal').textContent = num(cartTotals().total);
@@ -353,15 +389,56 @@ $('search').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   const v = $('search').value.trim();
   const p = byBarcode[norm(v)] || byBarcode[v];
-  if (p){ if (addToCart(p)) toast('أُضيف: ' + p.name); $('search').value = ''; renderList(); return; }
+  if (p){ if (addToCart(p) === true) toast('أُضيف: ' + p.name); $('search').value = ''; renderList(); return; }
   const found = products.filter(x => matches(x, v));
-  if (found.length === 1){ if (addToCart(found[0])) toast('أُضيف: ' + found[0].name); $('search').value = ''; renderList(); }
+  if (found.length === 1){ if (addToCart(found[0]) === true) toast('أُضيف: ' + found[0].name); $('search').value = ''; renderList(); }
 });
 $('list').addEventListener('click', e => {
   const b = e.target.closest('.p'); if (!b) return;
   const p = byId[b.dataset.id]; if (!p) return;
-  if (addToCart(p)) toast('أُضيف: ' + p.name);
+  if (addToCart(p) === true) toast('أُضيف: ' + p.name);
 });
+
+/* ===== إدخال الوزن ===== */
+let wProd = null, wMode = 'add';
+function parseW(s){
+  s = String(s).replace(/[٠-٩]/g, d => d.charCodeAt(0) - 1632).replace(/[،,٫]/g, '.').trim();
+  return /^\d+(\.\d{1,3})?$/.test(s) ? Number(s) : NaN;
+}
+function openWeight(p, mode){
+  wProd = p; wMode = mode;
+  const cur = cart[p.id] || 0;
+  $('wName').textContent = p.name + (p.supplier ? ' · ' + p.supplier : '');
+  $('wPrice').textContent = num(p.price) + ' / كجم';
+  $('wInfo').textContent = 'المتاح: ' + qf(p.balance) + ' كجم' + (cur ? ' · في السلة: ' + qf(cur) + ' كجم' : '');
+  $('wLabel').textContent = mode === 'set' ? 'الوزن الكلي الجديد (كجم)' : (cur ? 'وزن إضافي (كجم)' : 'الوزن (كجم)');
+  $('wOk').textContent = mode === 'set' ? 'تعديل الوزن' : 'إضافة للسلة';
+  $('wInput').value = mode === 'set' ? String(cur) : '';
+  $('wMsg').innerHTML = '';
+  updWTotal(); show('weigh');
+  setTimeout(() => { $('wInput').focus(); $('wInput').select(); }, 60);
+}
+function updWTotal(){
+  const w = parseW($('wInput').value);
+  if (isNaN(w) || w <= 0 || !wProd){ $('wTotal').textContent = '—'; return; }
+  const base = wMode === 'set' ? 0 : (cart[wProd.id] || 0);
+  $('wTotal').textContent = num(r2(r3(base + w) * wProd.price));
+}
+function confirmWeight(){
+  const p = wProd; if (!p) return;
+  const w = parseW($('wInput').value);
+  if (isNaN(w) || w <= 0){ $('wMsg').innerHTML = '<div class="msg bad">أدخل وزنًا صحيحًا أكبر من صفر (حتى 3 أرقام بعد الفاصلة).</div>'; return; }
+  const cur = cart[p.id] || 0;
+  const nw = r3(wMode === 'set' ? w : cur + w);
+  if (nw > p.balance + 1e-9){ $('wMsg').innerHTML = '<div class="msg bad">المتاح من «' + esc(p.name) + '» ' + qf(p.balance) + ' كجم فقط.</div>'; return; }
+  cart[p.id] = nw; touch();
+  hide('weigh');
+  toast(p.name + ': ' + qf(nw) + ' كجم');
+}
+$('wInput').addEventListener('input', updWTotal);
+$('wInput').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); confirmWeight(); } });
+$('wOk').addEventListener('click', confirmWeight);
+$('wClose').addEventListener('click', () => hide('weigh'));
 
 /* ===== أحداث السلة ===== */
 $('btnCart').addEventListener('click', openCart);
@@ -376,6 +453,8 @@ $('cartBody').addEventListener('click', e => {
   if (act === 'inc'){ if (cart[id] + 1 > p.balance) toast('المتاح من «' + p.name + '» ' + num(p.balance) + ' فقط', true); else { cart[id]++; touch(); } }
   if (act === 'dec'){ cart[id]--; if (cart[id] < 1) delete cart[id]; touch(); }
   if (act === 'rm'){ delete cart[id]; touch(); }
+  if (act === 'wadd') openWeight(p, 'add');
+  if (act === 'wset') openWeight(p, 'set');
 });
 $('doneNew').addEventListener('click', () => { hide('doneView'); $('search').value = ''; renderList(); });
 $('btnLabels').addEventListener('click', () => {
@@ -410,6 +489,7 @@ $('setSave').addEventListener('click', async () => {
 let stream = null, scanTimer = null, h5 = null, lastCode = '', lastAt = 0;
 
 function onCode(raw){
+  if ($('weigh').classList.contains('show')) return;   // لا نمسح أثناء إدخال الوزن
   const code = String(raw || '').trim();
   const now = Date.now();
   if (!code || (code === lastCode && now - lastAt < 1500)) return;
@@ -417,6 +497,7 @@ function onCode(raw){
   const p = byBarcode[code];
   if (p){
     const ok = addToCart(p);
+    if (ok === 'weigh'){ $('scanLast').textContent = '⚖ أدخل وزن: ' + p.name; beep(); return; }
     $('scanLast').textContent = ok ? '✓ ' + p.name + ' ' + p.size + ' ' + p.unit + ' — في السلة: ' + cart[p.id] : '⚠ ' + p.name + ': لا توجد كمية كافية';
     if (ok){ if (navigator.vibrate) navigator.vibrate(60); beep(); }
   } else {
